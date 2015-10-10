@@ -1,0 +1,391 @@
+﻿@{
+    ViewBag.Title = "Twitter Visualisation";
+}
+
+<div>
+
+    <section id="container"></section>
+
+    <section>
+        <label for="textToGet">Search For: </label><input type="text" id="textToGet" /> <br />
+        <label for="numberToGet">Number of Results: </label><input id="numberToGet" type="number" value="5" /><br />
+        <button id="getTweets">Get Tweets</button>
+    </section>
+    
+
+    <section>
+        <h3>Tweet Results</h3>
+        <div id="results">None</div>
+    </section>
+    
+    <section>
+        <h3>
+            Settings
+        </h3>
+        <ul>
+            <li>
+                Color - Number of hashtags
+            </li>
+            <li>
+                Distance from Center - User Mentions
+            </li>
+            <li>
+                Size of Sphere - Retweet count + Favourite Count
+            </li>
+            <li>
+                Orbit speed - Nothing yet.
+            </li>
+        </ul>
+    </section>
+
+</div>
+<script src="~/Scripts/three.min.js"></script>
+<script src="~/Scripts/OrbitControls.js"></script>
+<script src="~/Scripts/jquery-1.10.2.min.js"></script>
+<script>
+
+    var tweetHandler = (function () {
+
+
+        $(document).ready(function () {
+
+            $('#getTweets').click(function () {
+
+                var textToGet = $('#textToGet').val();
+                var numberToGet = $('#numberToGet').val();
+
+                $.get('/home/getTweets', { searchFor: textToGet, numberToGet: numberToGet }, function (resp) {
+
+                    var parsedResp = JSON.parse(resp).statuses;
+
+                    var html = "<ul>";
+                    for (var i = 0; i < parsedResp.length; i++) {
+                        var currentResp = parsedResp[i];
+                        html += "<li>" + currentResp.text + "</li>";
+                    }
+                    html += "</ul>";
+
+                    $('#results').html(html);
+
+                    graphicsHandler.setTweets(parsedResp);
+                });
+            });
+
+        });
+
+
+        return {
+        }
+    })();
+
+
+    var graphicsHandler = (function () {
+        var WIDTH = 1200,
+          HEIGHT = 600;
+
+        function addAxis() {
+            var axisX = new THREE.Mesh(
+            new THREE.BoxGeometry(WIDTH, 5, 5),
+            new THREE.MeshBasicMaterial(
+            {
+                color: 0xFFFFFF
+            })
+            );
+            axisX.position.y = -HEIGHT / 8;
+            scene.add(axisX);
+            var axisY = new THREE.Mesh(
+                new THREE.BoxGeometry(5, WIDTH, 5),
+                new THREE.MeshBasicMaterial(
+                {
+                    color: 0xFFFFFF
+                }));
+            axisY.position.y = axisX.position.y;
+            scene.add(axisY);
+            var axisZ = new THREE.Mesh(
+                new THREE.BoxGeometry(5, 5, WIDTH),
+                new THREE.MeshBasicMaterial(
+                {
+                    color: 0xFFFFFF
+                }));
+            axisZ.position.y = axisX.position.y;
+            scene.add(axisZ);
+        }
+
+
+        function makeSphere(radius, segments, rings, sphereColor) {
+            //Defaults
+            radius = radius != null ? radius : 50;
+            segments = segments != null ? segments : 16;
+            rings = rings != null ? rings : 16;
+            sphereMaterial = new THREE.MeshLambertMaterial(
+                    {
+                        color: new THREE.Color(sphereColor)
+                    });
+
+            return new THREE.Mesh(
+                new THREE.SphereGeometry(radius, segments, rings),
+                sphereMaterial);
+        }
+
+        // set some camera attributes
+        var VIEW_ANGLE = 45,
+          ASPECT = WIDTH / HEIGHT,
+          NEAR = 0.1,
+          FAR = 10000;
+
+        var $container = $('#container');
+
+        var renderer = new THREE.WebGLRenderer();
+        var camera =
+          new THREE.PerspectiveCamera(
+            VIEW_ANGLE,
+            ASPECT,
+            NEAR,
+            FAR);
+        var controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.25;
+        controls.enableZoom = false;
+
+        var scene = new THREE.Scene();
+        scene.add(camera);
+        // the camera starts at 0,0,0
+        // so pull it back
+        camera.position.z = 300;
+
+        // start the renderer
+        renderer.setSize(WIDTH, HEIGHT);
+
+        // attach the render-supplied DOM element
+        $container.append(renderer.domElement);
+
+        function addLights() {
+            function makeLight() {
+                var light = new THREE.PointLight(0xFFFFFF);
+                // set its position
+                light.position.x = 10;
+                light.position.y = 50;
+                light.position.z = 130;
+                return light;
+            }
+            // create a point light
+            var pointLight2 = makeLight();
+            pointLight2.position.x = -(WIDTH / 2);
+            pointLight2.position.y = 200;
+            pointLight2.position.z = 0;
+
+            var light = new THREE.AmbientLight(0x404040); // soft white light
+            scene.add(light);
+            scene.add(pointLight2);
+        }
+
+        addLights();
+        addAxis();
+
+
+        // shim layer with setTimeout fallback
+        window.requestAnimFrame = (function () {
+            return window.requestAnimationFrame ||
+                    window.webkitRequestAnimationFrame ||
+                    window.mozRequestAnimationFrame ||
+                    function (callback) {
+                        window.setTimeout(callback, 1000 / 60);
+                    };
+        })();
+
+        function render() {
+            renderer.render(scene, camera);
+        }
+
+        function clearTweetsFromScene() {
+            for (var i = 0; i < tweets.sceneObjects.length; i++) {
+                scene.remove(tweets.sceneObjects[i]);
+            }
+            tweets.sceneObjects = [];
+        }
+
+        var tweetObjectProperties = (function() {
+            
+
+            function getTweetSize(tweet) {
+                var maxRetweets = 10;
+                var tweetSize = tweet.retweet_count + tweet.favorite_count + 1;
+                tweetSize = tweetSize > maxRetweets ? maxRetweets : tweetSize;
+                return tweetSize * 0.10;
+            }
+
+            function getTweetColor(tweet) {
+                var startColor = 255;
+                var numberOfHashtags = tweet.entities.hashtags.length;
+
+                var maxHashTags = 5;
+                var stepSize = startColor / maxHashTags;
+
+                var colorVal = Math.round(startColor - stepSize * numberOfHashtags);
+
+                return "rgb(" + colorVal + "," + colorVal + "," + colorVal + ")";
+            }
+
+            function getTweetOrbitSpeed(tweet) {
+                return Math.random() * 0.01;
+            }
+
+            function getTweetDistanceFromCenter(tweet) {
+                var userMentions = tweet.entities.user_mentions.length;
+
+                var maxUserMentions = 3;
+                var startingLocation = (WIDTH / 6);
+                var minDistance = 50;
+
+                var stepSize = startingLocation / maxUserMentions;
+
+                var distance = startingLocation - (stepSize * userMentions) + minDistance;
+                return distance;
+            }
+
+            return {
+                getTweetSize: getTweetSize,
+                getTweetColor: getTweetColor,
+                getTweetOrbitSpeed: getTweetOrbitSpeed,
+                getTweetDistanceFromCenter: getTweetDistanceFromCenter
+            }
+
+        })();
+
+
+        function getLines(ctx, text, maxWidth) {
+            var words = text.split(" ");
+            var lines = [];
+            var currentLine = words[0];
+
+            for (var i = 1; i < words.length; i++) {
+                var word = words[i];
+                var width = ctx.measureText(currentLine + " " + word).width;
+                if (width < maxWidth) {
+                    currentLine += " " + word;
+                } else {
+                    lines.push(currentLine);
+                    currentLine = word;
+                }
+            }
+            lines.push(currentLine);
+            return lines;
+        }
+
+        function createTweetTextObject(tweet) {
+            // create a canvas element
+            canvas1 = document.createElement('canvas');
+
+            context1 = canvas1.getContext('2d');
+
+
+            var canvasFontSize = 12;
+            var canvasWidth = 250;
+
+            var lines = getLines(context1, tweet.text, canvasWidth);
+
+            context1.font = "Bold " + canvasFontSize +  "px Arial";
+            context1.fillStyle = "rgba(255,255,255,0.95)";
+            for (var i = 0; i < lines.length; i++) {
+                var currentLine = lines[i];
+                context1.fillText(currentLine, 0, 20 + (i * canvasFontSize));
+            }
+
+            texture1 = new THREE.Texture(canvas1)
+            texture1.needsUpdate = true;
+
+
+            var spriteMaterial = new THREE.SpriteMaterial({ map: texture1 });
+
+            sprite1 = new THREE.Sprite(spriteMaterial);
+            sprite1.scale.set(100, 100, 1.0);
+            return sprite1;
+        }
+
+        function createTweetSphereObject(tweet) {
+            var tweetSize = tweetObjectProperties.getTweetSize(tweet);
+            var tweetColor = tweetObjectProperties.getTweetColor(tweet);
+
+            var sphere = makeSphere(null, null, null, tweetColor);
+            sphere.scale.x = tweetSize;
+            sphere.scale.y = tweetSize;
+            sphere.scale.z = tweetSize;
+
+            sphere.geometry.dynamic = true;
+            sphere.geometry.normalsNeedUpdate = true;
+            sphere.geometry.verticesNeedUpdate = true;
+            return sphere;
+        }
+
+        function renderCurrentTweets() {
+            var currentTweets = tweets.actualTweets;
+            for (var i = 0; i < currentTweets.length; i++) {
+                var tweet = currentTweets[i];
+
+                var posFromCenter = tweetObjectProperties.getTweetDistanceFromCenter(tweet);
+
+                var sphere = createTweetSphereObject(tweet);
+                var textObj = createTweetTextObject(tweet);
+                textObj.position.y +=50;
+                
+                var remainder = i % 2;
+                switch (remainder) {
+                    case 0:
+                        sphere.position.x = posFromCenter;
+                        textObj.position.x = posFromCenter;
+                        break;
+                    case 1:
+                        sphere.position.z = posFromCenter;
+                        textObj.position.z = posFromCenter;
+                        break;
+                }
+
+                var wrapper = new THREE.Object3D();
+                wrapper.add(sphere);
+                wrapper.add(textObj);
+                wrapper.orbitSpeed = tweetObjectProperties.getTweetOrbitSpeed(tweet);
+
+                tweets.sceneObjects.push(wrapper);
+                scene.add(wrapper);
+            }
+        }
+
+        function Tweets() {
+            this.actualTweets = [];
+            this.sceneObjects = [];
+            this.tweetsUpdated = false;
+        }
+        var tweets = new Tweets();
+
+        function orbitTweets() {
+            for (var i = 0; i < tweets.sceneObjects.length; i++) {
+                var currentObj = tweets.sceneObjects[i];
+                currentObj.rotation.y += currentObj.orbitSpeed;
+            }
+        }
+
+
+        (function animloop() {
+            if (tweets.tweetsUpdated) {
+                tweets.tweetsUpdated = false;
+                clearTweetsFromScene();
+                renderCurrentTweets();
+            }
+
+            requestAnimFrame(animloop);
+
+            orbitTweets();
+            render();
+        })();
+
+        function setTweets(newTweets) {
+            tweets.actualTweets = newTweets;
+            tweets.tweetsUpdated = true;
+        }
+
+        return {
+            setTweets: setTweets
+        }
+
+    })();
+</script>
